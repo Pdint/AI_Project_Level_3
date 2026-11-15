@@ -1,27 +1,32 @@
-"""동영상에서 사람을 추적하고 Qt 화면에 프레임별 결과를 전달합니다."""
-from collections import deque
-from math import atan2, degrees, hypot, isfinite
+"""영상·카메라를 읽어 파이프라인으로 추적하고 Qt 화면에 프레임별 결과를 전달합니다 (요구 사항 8).
+
+``replay``를 주면 모델을 실행하지 않고 저장된 추적 결과 파일을 영상 위에 다시 그립니다 (요구 사항 10).
+"""
+from math import isfinite
 from threading import Condition, Event
-from time import perf_counter
 
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
 
-from models_runtime import MODEL_DIR, mosaic_faces, person_class, person_weights, track_people
+from pipeline import TrackRow, TrackingPipeline
+from tracker import STATUS_EXITED, STATUS_OCCLUDED, MotionRecorder
 
 
 class TrackingThread(QThread):
-    metadata = Signal(int)
-    frame_ready = Signal(QImage, list, int, float)
+    metadata = Signal(int, float, bool)            # 길이(ms), FPS, 카메라 여부
+    frame_ready = Signal(QImage, list, list, int, int, dict)  # 이미지, 트랙, 대기 트랙, 위치(ms), 프레임 번호, 시간
     failed = Signal(str)
 
-    def __init__(self, source, parent=None):
+    def __init__(self, source, config=None, replay=None, parent=None):
         super().__init__(parent)
-        self.source = source
+        self.source = source            # 파일 경로 또는 카메라 번호(int)
+        self.config = config
+        self.replay = replay
         self.control = Condition()
         self.paused = False
         self.cancelled = False
         self.displayed = Event()
+        self.tracker_config = None
 
     def set_paused(self, paused):
         with self.control:
@@ -40,80 +45,65 @@ class TrackingThread(QThread):
         except Exception as error:
             self.failed.emit(str(error))
 
-    def track_video(self):
+    def _open(self):
         import cv2
-        from ultralytics import YOLO
 
+        camera = isinstance(self.source, int)
         capture = cv2.VideoCapture(self.source)
+        if not capture.isOpened():
+            raise ValueError(f"카메라 {self.source}번을 열 수 없습니다." if camera else "영상을 열 수 없습니다.")
+        fps = capture.get(cv2.CAP_PROP_FPS)
+        fps = fps if isfinite(fps) and 0 < fps < 240 else 30.0
+        frame_count = capture.get(cv2.CAP_PROP_FRAME_COUNT)
+        duration = 0 if camera or not isfinite(frame_count) else round(frame_count * 1000 / fps)
+        return capture, fps, max(0, duration), camera
+
+    def track_video(self):
+        capture, fps, duration, camera = self._open()
         try:
             ok, frame = capture.read()
             if not ok:
                 raise ValueError("영상 프레임을 읽을 수 없습니다.")
-            fps = capture.get(cv2.CAP_PROP_FPS)
-            fps = fps if isfinite(fps) and fps > 0 else 30.0
-            frame_count = capture.get(cv2.CAP_PROP_FRAME_COUNT)
-            duration = round(frame_count * 1000 / fps) if isfinite(frame_count) else 0
-            self.metadata.emit(max(0, duration))
-
-            model = YOLO(person_weights())
-            class_id = person_class(model)
-            face_weights = MODEL_DIR / "face.pt"
-            face_model = YOLO(str(face_weights)) if face_weights.is_file() else None
-            if face_model is not None and set(face_model.names.values()) != {"face"}:
-                raise ValueError("models/face.pt는 face 단일 클래스 가중치여야 합니다.")
-            tracks = {}
+            self.metadata.emit(duration, fps, camera)
+            pipeline = None
+            motion = MotionRecorder(fps)
+            if self.replay is None:
+                pipeline = TrackingPipeline(self.config, fps)
+                self.tracker_config = pipeline.tracker_config
             index = 0
             while ok:
                 with self.control:
                     self.control.wait_for(lambda: not self.paused or self.cancelled)
                     if self.cancelled:
                         return
-
-                started = perf_counter()
-                boxes = track_people(model, frame, class_id)
-                if face_model is not None:
-                    mosaic_faces(frame, face_model)
-                elapsed = perf_counter() - started
-                rows = update_tracks(boxes, tracks)
+                index += 1
+                if pipeline is not None:
+                    rows, waiting, timings = pipeline.process(frame)
+                else:
+                    rows, waiting = self._replay_rows(index, motion)
+                    timings = {}
                 height, width, _ = frame.shape
-                image = QImage(
-                    frame.data, width, height, frame.strides[0], QImage.Format_BGR888
-                ).copy()
-                # 화면이 소비할 때까지 기다려 프레임이 신호 큐에 누적되는 것을 막습니다.
+                image = QImage(frame.data, width, height, frame.strides[0], QImage.Format_BGR888).copy()
+                # 화면이 그릴 때까지 기다려 프레임이 신호 큐에 쌓이지 않게 합니다.
                 self.displayed.clear()
                 with self.control:
                     if self.cancelled:
                         return
-                self.frame_ready.emit(image, rows, round(index * 1000 / fps), elapsed)
+                self.frame_ready.emit(image, rows, waiting, round((index - 1) * 1000 / fps), index, timings)
                 self.displayed.wait()
-                with self.control:
-                    if self.cancelled:
-                        return
-                index += 1
                 ok, frame = capture.read()
         finally:
             capture.release()
 
-
-def update_tracks(boxes, tracks):
-    """추적기가 부여한 ID를 기준으로 좌표와 누적 화면 이동 거리를 기록합니다."""
-    if boxes is None or boxes.id is None:
-        return []
-    rows = []
-    for track_id, coordinates in zip(boxes.id.int().cpu().tolist(), boxes.xyxy.cpu().tolist()):
-        x1, y1, x2, y2 = coordinates
-        x, y = (x1 + x2) / 2, (y1 + y2) / 2
-        trail, distance = tracks.get(track_id, (deque(maxlen=45), 0.0))
-        direction = "—"
-        if trail:
-            last_x, last_y = trail[-1]
-            dx, dy = x - last_x, y - last_y
-            step = hypot(dx, dy)
-            distance += step
-            if step >= 1:
-                octant = round(degrees(atan2(dy, dx)) / 45) % 8
-                direction = ("→", "↘", "↓", "↙", "←", "↖", "↑", "↗")[octant]
-        trail.append((x, y))
-        tracks[track_id] = trail, distance
-        rows.append((track_id, coordinates, tuple(trail), direction, distance))
-    return sorted(rows, key=lambda row: row[0])
+    def _replay_rows(self, index, motion):
+        """저장된 행을 화면용 트랙으로 바꿉니다. 가림·화면 이탈 상태는 대기 목록으로 분리합니다."""
+        rows, waiting = [], []
+        for item in self.replay.get(index, []):
+            if item["status"] in (STATUS_OCCLUDED, STATUS_EXITED):
+                waiting.append(TrackRow(item["id"], item["class"], item["box"], item["score"],
+                                        item["status"], item["direction"], item["distance"], 0.0, ()))
+                continue
+            state = motion.update(item["id"], item["box"], index)
+            rows.append(TrackRow(item["id"], item["class"], item["box"], item["score"], item["status"],
+                                 item["direction"], item["distance"], item["speed"], tuple(state.trail)))
+        return rows, waiting

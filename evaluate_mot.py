@@ -1,4 +1,9 @@
-"""TrackEval에서 MOT17/MOT20의 HOTA, MOTA, IDF1, IDSW를 계산합니다."""
+r"""공식 TrackEval로 HOTA, MOTA, IDF1, IDSW를 교차 확인합니다 (선택).
+
+run_mot.py는 같은 계산을 metrics.py로 수행합니다. 보고서에 공식 도구 수치가 필요할 때 사용하세요.
+    python evaluate_mot.py --benchmark MOT17 --ground-truth datasets/mot/tracking/test \\
+        --results results/mot/test --trackers baseline improved --sequences MOT17-02-FRCNN
+"""
 import argparse
 from pathlib import Path
 import sys
@@ -25,6 +30,7 @@ def evaluate(args):
         "BENCHMARK": args.benchmark,
         "SPLIT_TO_EVAL": "train",
         "SKIP_SPLIT_FOL": True,
+        "TRACKER_SUB_FOLDER": args.sub_folder,
         "SEQ_INFO": dict.fromkeys(args.sequences),
     })
     metrics = [trackeval.metrics.HOTA(), trackeval.metrics.CLEAR(), trackeval.metrics.Identity()]
@@ -39,4 +45,5 @@ if __name__ == "__main__":
     parser.add_argument("--results", type=Path, required=True)
     parser.add_argument("--trackers", nargs="+", required=True)
     parser.add_argument("--sequences", nargs="+", required=True)
+    parser.add_argument("--sub-folder", default="", help="추적기 폴더 안의 결과 하위 폴더 (run_mot.py 결과는 비워 둠)")
     evaluate(parser.parse_args())
