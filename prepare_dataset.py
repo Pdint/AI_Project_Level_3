@@ -14,9 +14,9 @@ MOT 추적용 시퀀스(``tracking/<split>/<seq>``)는 프레임 번호를 1부�
 가시 비율을 그대로 보존한 ``gt/gt.txt``와 ``seqinfo.ini``를 만듭니다. 평가·튜닝·실패 분석이 이 폴더를 입력으로 씁니다.
 
 예)
-    python prepare_dataset.py mot --sequences datasets/MOT17/train datasets/MOT20/train --output datasets/mot
-    python prepare_dataset.py coco --train-images coco/train2017 --train-labels coco/annotations/instances_train2017.json \\
-        --val-images coco/val2017 --val-labels coco/annotations/instances_val2017.json --output datasets/coco4
+    python prepare_dataset.py mot --sequences datasets/raw/MOT17/train datasets/raw/MOT20/train --output datasets/mot
+    python prepare_dataset.py coco --train-images datasets/raw/coco/train2017 --train-labels datasets/raw/coco/annotations/instances_train2017.json \\
+        --val-images datasets/raw/coco/val2017 --val-labels datasets/raw/coco/annotations/instances_val2017.json --output datasets/coco4
 """
 import argparse
 import configparser

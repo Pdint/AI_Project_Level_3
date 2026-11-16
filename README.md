@@ -62,17 +62,31 @@ python -m venv .venv
 
 ### 1) 데이터 준비 (요구 사항 1)
 
+내려받은 원본은 모두 `datasets/raw/` 아래에 풉니다. `datasets/`는 `.gitignore`에 들어 있어 수십 GB 데이터가 git에 잡히지 않고,
+전처리 결과(`datasets/mot`, `datasets/coco4`, `datasets/crowd`, `datasets/face`)와도 폴더가 겹치지 않습니다.
+
+```
+datasets/raw/
+├─ MOT17/train/MOT17-02-FRCNN/{img1, gt, seqinfo.ini} ...   (MOT17.zip)
+├─ MOT20/train/...                                          (MOT20.zip, 선택)
+├─ coco/{train2017, val2017, annotations}                   (선택)
+├─ crowd/{train/Images, val/Images, annotation_train.odgt, annotation_val.odgt}  (선택)
+└─ wider/{WIDER_train, WIDER_val, wider_face_split}          (선택)
+```
+
 MOT17·MOT20은 공식 ZIP의 `train` 폴더를 사용합니다 (test는 정답이 공개되지 않음).
 
 ```powershell
-python prepare_dataset.py mot --sequences datasets/MOT17/train datasets/MOT20/train --output datasets/mot
-python prepare_dataset.py coco --train-images coco/train2017 --train-labels coco/annotations/instances_train2017.json --val-images coco/val2017 --val-labels coco/annotations/instances_val2017.json --output datasets/coco4
-python prepare_dataset.py crowd --train-images crowd/train/Images --train-labels crowd/annotation_train.odgt --val-images crowd/val/Images --val-labels crowd/annotation_val.odgt --output datasets/crowd
-python prepare_dataset.py face --train-images wider/WIDER_train/images --train-labels wider/wider_face_split/wider_face_train_bbx_gt.txt --val-images wider/WIDER_val/images --val-labels wider/wider_face_split/wider_face_val_bbx_gt.txt --output datasets/face
+python prepare_dataset.py mot --sequences datasets/raw/MOT17/train datasets/raw/MOT20/train --output datasets/mot
+python prepare_dataset.py coco --train-images datasets/raw/coco/train2017 --train-labels datasets/raw/coco/annotations/instances_train2017.json --val-images datasets/raw/coco/val2017 --val-labels datasets/raw/coco/annotations/instances_val2017.json --output datasets/coco4
+python prepare_dataset.py crowd --train-images datasets/raw/crowd/train/Images --train-labels datasets/raw/crowd/annotation_train.odgt --val-images datasets/raw/crowd/val/Images --val-labels datasets/raw/crowd/annotation_val.odgt --output datasets/crowd
+python prepare_dataset.py face --train-images datasets/raw/wider/WIDER_train/images --train-labels datasets/raw/wider/wider_face_split/wider_face_train_bbx_gt.txt --val-images datasets/raw/wider/WIDER_val/images --val-labels datasets/raw/wider/wider_face_split/wider_face_val_bbx_gt.txt --output datasets/face
 ```
 
-CrowdHuman은 `CrowdHuman_train01~03.zip`의 이미지를 `crowd/train/Images` 하나에 모으고, `CrowdHuman_val.zip`은 `crowd/val/Images`로 풉니다.
+MOT20을 받지 않았으면 첫 줄에서 `datasets/raw/MOT20/train`을 빼세요.
+CrowdHuman은 `CrowdHuman_train01~03.zip`의 이미지를 `datasets/raw/crowd/train/Images` 하나에 모으고, `CrowdHuman_val.zip`은 `datasets/raw/crowd/val/Images`로 풉니다.
 COCO는 `--limit 5000`처럼 분할당 이미지 수를 제한해 빠르게 실험할 수 있습니다.
+기본 `yolo11n.pt`가 이미 COCO로 학습된 모델이므로, 사람·고양이·개·새 검출은 COCO 학습 없이도 동작합니다.
 
 ### 2) 검출기 Fine-tuning (요구 사항 6)
 
@@ -83,8 +97,18 @@ python train_models.py mot   --data datasets/mot/dataset.yaml   --weights yolo11
 python train_models.py face  --data datasets/face/dataset.yaml  --weights yolo11n.pt --epochs 30 --install
 ```
 
-CUDA가 있으면 `--device 0`을 붙입니다. `--install` 없이 학습한 가중치는 아래 3)에서 `--weights`로 비교한 뒤
+CUDA가 있으면 `--device 0`을 붙이고, `--workers 4`로 데이터 로딩을 병렬화하면 GPU를 더 잘 씁니다.
+GPU가 없으면 아래 "Google Colab에서 학습하기"를 참고하세요. `--install` 없이 학습한 가중치는 아래 3)에서 `--weights`로 비교한 뒤
 좋은 쪽을 `models/person.pt`로 복사하세요 (`--install`은 기존 파일을 날짜를 붙여 백업합니다).
+
+### Google Colab에서 학습하기
+
+[`colab/train_mot17.ipynb`](colab/train_mot17.ipynb)를 Colab에서 열고(파일 → 노트북 업로드, 또는 GitHub 탭에서 이 저장소 선택)
+**런타임 → 런타임 유형 변경 → GPU**를 고른 뒤 위에서부터 차례로 실행합니다.
+MOT17 내려받기, 전처리, Fine-tuning 전 성능 측정, 학습, 학습 전후 비교, 파라미터 튜닝, 최종 비교, 실패 분석까지 진행하고
+결과(`models/person.pt`+`.json`, `configs/tuned.json`, `results/`)를 Google Drive의 `AI_Project_Level_3_outputs/`에 저장합니다.
+이 폴더의 내용을 내 PC 프로젝트 폴더에 같은 경로로 복사하면 GUI의 모델 목록·추적기 목록·성능 비교 탭에 그대로 나타납니다.
+처리 속도(요구 사항 8)는 발표 PC에서 `benchmark_speed.py`로 따로 측정하세요.
 
 ### 3) 추적 성능 비교와 튜닝 (요구 사항 3·6·7)
 

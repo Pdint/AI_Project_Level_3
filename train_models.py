@@ -28,7 +28,7 @@ def train(args):
     model = YOLO(args.weights)
     options = {
         "data": args.data, "epochs": args.epochs, "imgsz": args.imgsz, "batch": args.batch,
-        "device": args.device, "workers": 0, "project": str(Path(args.runs).resolve()),
+        "device": args.device, "workers": args.workers, "project": str(Path(args.runs).resolve()),
         "name": args.kind, "seed": 42, "optimizer": args.optimizer, "lr0": args.lr0,
         "freeze": args.freeze, "mosaic": args.mosaic, "patience": args.patience,
     }
@@ -42,7 +42,7 @@ def train(args):
     for split in ("val", "test"):
         try:
             result = tuned.val(data=args.data, split=split, imgsz=args.imgsz, batch=args.batch,
-                               device=args.device, workers=0, verbose=False, plots=False)
+                               device=args.device, workers=args.workers, verbose=False, plots=False)
             scores[split] = {"mAP50": float(result.box.map50), "mAP50-95": float(result.box.map)}
         except Exception as error:  # dataset.yaml에 test가 없을 수 있습니다.
             scores[split] = {"error": str(error)}
@@ -81,6 +81,7 @@ if __name__ == "__main__":
     parser.add_argument("--mosaic", type=float, default=1.0, help="모자이크 증강 확률 (0이면 끔)")
     parser.add_argument("--patience", type=int, default=10)
     parser.add_argument("--device", default="cpu", help="cpu 또는 CUDA 장치 번호")
+    parser.add_argument("--workers", type=int, default=0, help="데이터 로딩 프로세스 수 (Windows는 0 권장, Colab·Linux GPU는 4 정도)")
     parser.add_argument("--runs", default="training_runs")
     parser.add_argument("--install", action="store_true", help="best.pt를 models/에 설치")
     train(parser.parse_args())
